@@ -15,22 +15,50 @@ SoftwareSerial gpsSerial(3, 4);
 TinyGPSPlus gps;
 LedControl lc = LedControl(5, 7, 6, 1);
 
-const int offsetHours = 5;
-const int offsetMinutes = 30;
+// Configuration Constants
+const uint16_t OLED_REFRESH_MS = 500;
+const uint16_t CLOCK_INTERVAL_MS = 1000;
+const int16_t IST_OFFSET_HOURS = 5;
+const int16_t IST_OFFSET_MINUTES = 30;
+const uint32_t GPS_BAUD_RATE = 9600;
 
-int lYear, lMonth, lDay, lHour, lMin, lSec;
-float gLat = 0.0, gLon = 0.0, gSpeed = 0.0, gAlt = 0.0;
-int gSats = 0;
-bool hasFix = false;
+// Data Models
+struct GPSTelemetry {
+  float lat = 0.0;
+  float lon = 0.0;
+  float altitude = 0.0;
+  float speed = 0.0;
+  uint8_t satellites = 0;
+  bool hasFix = false;
+} telemetry;
 
-unsigned long lastPageChange = 0;
-int currentPage = 1;
-bool globalShowColon = false;
-char sharedTimeStrOLED[30];
-unsigned long lastSerialPrint = 0;
+struct ClockState {
+  uint16_t year = 0;
+  uint8_t month = 0;
+  uint8_t day = 0;
+  uint8_t hour = 0;
+  uint8_t minute = 0;
+  uint8_t second = 0;
+  bool isTimeReal = false;
+} clockState;
+
+struct DisplayState {
+  bool showColon = false;
+  uint8_t lastMaxDigits[8] = {255, 255, 255, 255, 255, 255, 255, 255}; // 255 forces initial draw
+} displayState;
+
+struct GPSStats {
+  uint32_t charsProcessed = 0;
+  uint32_t sentencesParsed = 0;
+  uint32_t failedChecksum = 0;
+} stats;
+
+// Timers
+unsigned long lastOLEDUpdate = 0;
 
 void initOLED();
 void initGPS();
+void configureGPS();
 void initMAX7219();
 void readGPS();
 void updateClock();
@@ -38,16 +66,12 @@ void utcToIST();
 bool isLeapYear(int y);
 int daysInMonth(int m, int y);
 void incrementDate();
-void drawClockPage();
 void updateOLED();
 void updateMAX7219();
-void displayTime();
-void displayError();
-void blinkColon();
-void centerText(const char* text, int y);
-void clearPage();
+void sendUBX(const uint8_t *msg, uint8_t len);
 
 void setup() {
+  Serial.begin(115200); // Debug
   initGPS();
   initMAX7219();
   initOLED();
@@ -56,18 +80,10 @@ void setup() {
 void loop() {
   readGPS();
   updateClock();
-
-  // Only update the displays when the time changes or the colon blinks (twice a second).
-  // This stops the OLED from hogging the CPU and makes the clock flipping incredibly sharp!
-  static bool lastColonState = false;
-  static int lastSecState = -1;
-  bool gpsUpdated = gps.location.isUpdated() || gps.speed.isUpdated() || gps.satellites.isUpdated();
+  updateMAX7219();
   
-  if (globalShowColon != lastColonState || lSec != lastSecState || gpsUpdated) {
-    lastColonState = globalShowColon;
-    lastSecState = lSec;
-    
-    updateMAX7219();
+  if (millis() - lastOLEDUpdate >= OLED_REFRESH_MS) {
+    lastOLEDUpdate = millis();
     updateOLED();
   }
 }
@@ -83,20 +99,29 @@ void initOLED() {
   display.display();
 }
 
-void clearPage() {
-  display.clearDisplay();
+void sendUBX(const uint8_t *msg, uint8_t len) {
+  for (uint8_t i = 0; i < len; i++) {
+    gpsSerial.write(msg[i]);
+  }
+  delay(10);
 }
 
-void centerText(const char* text, int y) {
-  int16_t x1, y1;
-  uint16_t w, h;
-  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor((SCREEN_WIDTH - w) / 2, y);
-  display.print(text);
+void configureGPS() {
+  // Disable GLL
+  const uint8_t disableGLL[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A};
+  sendUBX(disableGLL, sizeof(disableGLL));
+  // Disable GSA
+  const uint8_t disableGSA[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31};
+  sendUBX(disableGSA, sizeof(disableGSA));
+  // Disable VTG
+  const uint8_t disableVTG[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x46};
+  sendUBX(disableVTG, sizeof(disableVTG));
 }
 
 void initGPS() {
-  gpsSerial.begin(9600);
+  gpsSerial.begin(GPS_BAUD_RATE);
+  delay(100);
+  configureGPS();
 }
 
 void initMAX7219() {
@@ -110,57 +135,50 @@ void readGPS() {
     gps.encode(gpsSerial.read());
   }
   
-  // Use .age() to guarantee the data is live. 5000ms allows skipping a few pings under trees without dropping.
   if (gps.location.isValid() && gps.location.age() < 5000) {
-    hasFix = true;
-    gLat = gps.location.lat();
-    gLon = gps.location.lng();
-    gSpeed = gps.speed.kmph();
-    gAlt = gps.altitude.meters();
+    telemetry.hasFix = true;
+    telemetry.lat = gps.location.lat();
+    telemetry.lon = gps.location.lng();
+    telemetry.speed = gps.speed.kmph();
+    telemetry.altitude = gps.altitude.meters();
   } else {
-    hasFix = false;
+    telemetry.hasFix = false;
   }
   
-  // Satellites are broadcast less frequently on some modules. Use a 10s age to prevent flickering to 0.
   if (gps.satellites.isValid() && gps.satellites.age() < 10000) {
-    gSats = gps.satellites.value();
+    telemetry.satellites = gps.satellites.value();
   } else {
-    gSats = 0;
+    telemetry.satellites = 0;
   }
+
+  stats.charsProcessed = gps.charsProcessed();
+  stats.sentencesParsed = gps.sentencesWithFix();
+  stats.failedChecksum = gps.failedChecksum();
 }
 
 void updateClock() {
-  bool isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
+  clockState.isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
 
-  if (isTimeReal) {
+  if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
     
-    // Only pull new time if GPS just parsed a new sentence
     if (gps.time.isUpdated()) {
       utcToIST();
       secondStartTime = millis();
     } else {
-      // Coast on Arduino's internal clock if GPS signal drops/delays (prevents freezing)
-      if (millis() - secondStartTime >= 1000) {
-        secondStartTime += 1000;
-        lSec++;
-        if (lSec >= 60) {
-          lSec = 0; lMin++;
-          if (lMin >= 60) { lMin = 0; lHour++; if (lHour >= 24) lHour = 0; }
+      if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
+        secondStartTime += CLOCK_INTERVAL_MS;
+        clockState.second++;
+        if (clockState.second >= 60) {
+          clockState.second = 0; clockState.minute++;
+          if (clockState.minute >= 60) { clockState.minute = 0; clockState.hour++; if (clockState.hour >= 24) clockState.hour = 0; }
         }
       }
     }
     
-    // Keep colon blinking forever, locked to the real/coasted second
-    globalShowColon = ((millis() - secondStartTime) % 1000) < 500;
-    
-    char cSep = globalShowColon ? ':' : ' ';
-    sprintf(sharedTimeStrOLED, "%02d%c%02d%c%02d FIX:%s S:%02d", lHour, cSep, lMin, cSep, lSec, hasFix ? "OK" : "--", gSats);
+    displayState.showColon = ((millis() - secondStartTime) % 1000) < 500;
   } else {
-    // If no real time, just blink based on the raw Arduino clock
-    globalShowColon = (millis() / 500) % 2 == 0;
-    char cSep = globalShowColon ? ':' : ' ';
-    sprintf(sharedTimeStrOLED, "--%c--%c-- FIX:%s S:%02d", cSep, cSep, hasFix ? "OK" : "--", gSats);
+    displayState.showColon = (millis() / 500) % 2 == 0;
   }
 }
 
@@ -175,105 +193,98 @@ int daysInMonth(int m, int y) {
 }
 
 void incrementDate() {
-  lDay++;
-  if (lDay > daysInMonth(lMonth, lYear)) {
-    lDay = 1;
-    lMonth++;
-    if (lMonth > 12) {
-      lMonth = 1;
-      lYear++;
+  clockState.day++;
+  if (clockState.day > daysInMonth(clockState.month, clockState.year)) {
+    clockState.day = 1;
+    clockState.month++;
+    if (clockState.month > 12) {
+      clockState.month = 1;
+      clockState.year++;
     }
   }
 }
 
 void utcToIST() {
-  lYear = gps.date.year();
-  lMonth = gps.date.month();
-  lDay = gps.date.day();
-  lHour = gps.time.hour();
-  lMin = gps.time.minute();
-  lSec = gps.time.second();
+  clockState.year = gps.date.year();
+  clockState.month = gps.date.month();
+  clockState.day = gps.date.day();
+  clockState.hour = gps.time.hour();
+  clockState.minute = gps.time.minute();
+  clockState.second = gps.time.second();
 
-  lMin += 30;
-  lHour += 5;
+  clockState.minute += IST_OFFSET_MINUTES;
+  clockState.hour += IST_OFFSET_HOURS;
 
-  if (lMin >= 60) {
-    lMin -= 60;
-    lHour += 1;
+  if (clockState.minute >= 60) {
+    clockState.minute -= 60;
+    clockState.hour += 1;
   }
-  if (lHour >= 24) {
-    lHour -= 24;
+  if (clockState.hour >= 24) {
+    clockState.hour -= 24;
     incrementDate();
   }
 }
 
-void updateOLED() {
-  clearPage();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  
-  // Line 1: Time, Fix and Satellites (Perfectly synced with MAX7219)
-  display.println(sharedTimeStrOLED);
-  
-  // Line 2: Latitude (Always show data immediately without waiting for hasFix flag)
-  char latBuf[16];
-  dtostrf(gLat, 11, 6, latBuf);
-  display.print(F("LAT:")); 
-  display.println(latBuf);
-  
-  // Line 3: Longitude 
-  char lonBuf[16];
-  dtostrf(gLon, 11, 6, lonBuf);
-  display.print(F("LON:")); 
-  display.println(lonBuf);
-  
-  // Line 4: Altitude and Speed (1 decimal place for stable accuracy without jumping)
-  char altBuf[8];
-  dtostrf(gAlt, 0, 1, altBuf);
-  char spdBuf[8];
-  dtostrf(gSpeed, 0, 1, spdBuf);
-  char altSpdBuf[28];
-  sprintf(altSpdBuf, "ALT:%s SPD:%s", altBuf, spdBuf);
-  display.println(altSpdBuf);
-
-  display.display();
-}
-
 void updateMAX7219() {
-  bool isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
-  if (isTimeReal) {
-    displayTime();
+  char sep = displayState.showColon ? '-' : ' ';
+  
+  if (clockState.isTimeReal) {
+    uint8_t digits[8] = {
+      (uint8_t)(clockState.second % 10),
+      (uint8_t)(clockState.second / 10),
+      (uint8_t)sep,
+      (uint8_t)(clockState.minute % 10),
+      (uint8_t)(clockState.minute / 10),
+      (uint8_t)sep,
+      (uint8_t)(clockState.hour % 10),
+      (uint8_t)(clockState.hour / 10)
+    };
+
+    for (int i = 0; i < 8; i++) {
+      if (displayState.lastMaxDigits[i] != digits[i]) {
+        displayState.lastMaxDigits[i] = digits[i];
+        if (i == 2 || i == 5) {
+          lc.setChar(0, i, (char)digits[i], false);
+        } else {
+          lc.setDigit(0, i, digits[i], false);
+        }
+      }
+    }
   } else {
-    displayError();
+    for (int i = 0; i < 8; i++) {
+      uint8_t val = (i == 2 || i == 5) ? sep : '-';
+      if (displayState.lastMaxDigits[i] != val) {
+        displayState.lastMaxDigits[i] = val;
+        lc.setChar(0, i, (char)val, false);
+      }
+    }
   }
 }
 
-void displayTime() {
-  char sep = globalShowColon ? '-' : ' ';
+void updateOLED() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
   
-  lc.setDigit(0, 7, lHour / 10, false);
-  lc.setDigit(0, 6, lHour % 10, false);
-  lc.setChar(0, 5, sep, false);
-  lc.setDigit(0, 4, lMin / 10, false);
-  lc.setDigit(0, 3, lMin % 10, false);
-  lc.setChar(0, 2, sep, false);
-  lc.setDigit(0, 1, lSec / 10, false);
-  lc.setDigit(0, 0, lSec % 10, false);
-}
-
-void displayError() {
-  char sep = globalShowColon ? '-' : ' ';
+  char timeBuf[30];
+  char cSep = displayState.showColon ? ':' : ' ';
+  if (clockState.isTimeReal) {
+    sprintf(timeBuf, "%02d%c%02d%c%02d FIX:%s S:%02d", clockState.hour, cSep, clockState.minute, cSep, clockState.second, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
+  } else {
+    sprintf(timeBuf, "--%c--%c-- FIX:%s S:%02d", cSep, cSep, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
+  }
+  display.println(timeBuf);
   
-  lc.setChar(0, 7, '-', false);
-  lc.setChar(0, 6, '-', false);
-  lc.setChar(0, 5, sep, false);
-  lc.setChar(0, 4, '-', false);
-  lc.setChar(0, 3, '-', false);
-  lc.setChar(0, 2, sep, false);
-  lc.setChar(0, 1, '-', false);
-  lc.setChar(0, 0, '-', false);
-}
+  display.print(F("LAT:")); 
+  display.println(telemetry.lat, 6);
+  
+  display.print(F("LON:")); 
+  display.println(telemetry.lon, 6);
+  
+  display.print(F("ALT:"));
+  display.print(telemetry.altitude, 1);
+  display.print(F(" SPD:"));
+  display.println(telemetry.speed, 1);
 
-void blinkColon() {
-  // Implementation combined in displayTime()
+  display.display();
 }
