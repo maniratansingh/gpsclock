@@ -2,13 +2,15 @@
 
 A high-precision, dual-display GPS Clock built for Arduino. This project combines a MAX7219 LED Matrix for a large, bright time display and an SSD1306 OLED screen for an advanced dashboard showing real-time GPS telemetry.
 
-## Features
+## Pro Architecture Features
 
-- **Dual Display Sync:** The time and blinking colon are perfectly phase-locked between the MAX7219 matrix and the OLED dashboard.
-- **Ultra-Fast Time Fix:** The clock extracts time from the very first satellite it sees, allowing the time to fix almost instantly.
+- **Hardware UBX Optimization:** Automatically configures the Neo-6M GPS at startup to disable unnecessary data streams (`GLL`, `GSA`, `VTG`). This drastically reduces CPU load, minimizes serial traffic, and prevents buffer overflows.
+- **Decoupled Schedulers:** Display updates and GPS parsing run on completely separate, non-blocking timers. The OLED strictly updates exactly every 500ms to preserve the I2C bus bandwidth while parsing remains continuous.
+- **Advanced Display Caching:** The MAX7219 matrix caches its active digits in memory (`lastMaxDigits`). It only transmits SPI packets for the specific digits that have physically changed on the clock, resulting in lightning-fast redraws.
+- **SRAM Optimized:** Eliminates all bulky character arrays. Telemetry floats are printed directly to the OLED to maximize free memory on the Arduino Nano.
+- **Robust State Management:** Global variables are neatly organized into isolated `GPSTelemetry`, `ClockState`, and `DisplayState` structures.
 - **Anti-Freeze Fallback:** If you drive under a bridge or lose GPS signal, the Arduino's internal crystal oscillator seamlessly takes over to keep the clock ticking forward without freezing.
-- **Advanced Telemetry:** Displays Latitude, Longitude, Altitude, Speed, and Satellite Count in real-time.
-- **Robust Data Validation:** Only displays valid, verified GPS location data, preventing glitchy or false coordinates from appearing on the screen.
+- **Dual Display Sync:** The time and blinking colon are perfectly phase-locked between the MAX7219 matrix and the OLED dashboard.
 
 ## Hardware Required
 
