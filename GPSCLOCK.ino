@@ -181,9 +181,8 @@ void updateClock() {
     }
     
     // GPS Master Clock Synchronization
-    // We strictly evaluate this ONLY ONCE per new GPS second, regardless of how many 
-    // NMEA sentences (RMC/GGA) contain time data per second.
-    if (gps.time.isUpdated() && gps.time.second() != lastCheckedGPSSec) {
+    // We strictly evaluate this ONLY ONCE per new GPS second, bypassing the broken isUpdated() flag.
+    if (gps.time.second() != lastCheckedGPSSec) {
       lastCheckedGPSSec = gps.time.second();
       
       // Every fresh GPS second immediately re-locks the internal clock
