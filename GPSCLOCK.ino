@@ -142,14 +142,22 @@ void readGPS() {
     gps.encode(gpsSerial.read());
   }
   
-  if (gps.location.isValid() && gps.location.age() < 5000) {
+  // 30-SECOND FLYWHEEL
+  // If the GPS is erratic, we hold onto the last valid location for up to 30 seconds.
+  // This prevents the screen from flickering 'NO GPS' when you are outside.
+  if (gps.location.isValid() && gps.location.age() < 30000) {
     telemetry.hasFix = true;
     telemetry.lat = gps.location.lat();
     telemetry.lon = gps.location.lng();
     telemetry.speed = gps.speed.kmph();
     telemetry.altitude = gps.altitude.meters();
   } else {
+    // If you go indoors and 30 seconds pass with no fix, the clock officially DIES.
     telemetry.hasFix = false;
+    telemetry.lat = 0.0;
+    telemetry.lon = 0.0;
+    telemetry.speed = 0.0;
+    telemetry.altitude = 0.0;
   }
   
   if (gps.satellites.isValid() && gps.satellites.age() < 10000) {
@@ -164,43 +172,23 @@ void readGPS() {
 }
 
 void updateClock() {
-  clockState.isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
-
-  // --- DIAGNOSTICS FOR REVIEWER ---
-  static uint8_t lastSecMonitor = 255;
-  if (gps.time.second() != lastSecMonitor) {
-    lastSecMonitor = gps.time.second();
-    Serial.print(F("[DEBUG] Sec: "));
-    Serial.print(gps.time.second());
-    Serial.print(F(" | isUpdated(): "));
-    Serial.println(gps.time.isUpdated() ? "TRUE" : "FALSE");
-  }
-  // ---------------------------------
+  clockState.isTimeReal = telemetry.hasFix;
 
   if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
-    static bool inAntiFreeze = true; // Start in anti-freeze to force initial sync
-    static uint8_t lastCheckedGPSSec = 255; // Tracks the last evaluated GPS second
-    
-    // Detect Anti-Freeze mode (no valid time received for 2 seconds)
-    if (gps.time.age() > 2000) {
-      inAntiFreeze = true;
-    }
+    static uint8_t lastCheckedGPSSec = 255;
     
     // GPS Master Clock Synchronization
-    // We strictly evaluate this ONLY ONCE per new GPS second, bypassing the broken isUpdated() flag.
     if (gps.time.second() != lastCheckedGPSSec) {
       lastCheckedGPSSec = gps.time.second();
       
-      // Every fresh GPS second immediately re-locks the internal clock
+      // Instantly re-lock the internal clock
       utcToIST();
       secondStartTime = millis();
-      inAntiFreeze = false;
-      
-      Serial.println(F("[SYNC] Synchronization block executed!"));
     }
     
-    // The internal oscillator drives the clock smoothly
+    // Anti-Freeze Coasting
+    // The internal oscillator seamlessly drives the clock smoothly between erratic GPS drops
     if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
       secondStartTime += CLOCK_INTERVAL_MS;
       clockState.second++;
@@ -305,28 +293,36 @@ void updateMAX7219() {
 
 void updateOLED() {
   display.clearDisplay();
-  display.setTextSize(1);
   display.setCursor(0, 0);
   
-  char timeBuf[30];
   char cSep = displayState.showColon ? ':' : ' ';
+  
   if (clockState.isTimeReal) {
-    sprintf(timeBuf, "%02d%c%02d%c%02d FIX:%s S:%02d", clockState.hour, cSep, clockState.minute, cSep, clockState.second, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
+    display.setTextSize(1);
+    char timeBuf[30];
+    sprintf(timeBuf, "%02d%c%02d%c%02d FIX:OK S:%02d", clockState.hour, cSep, clockState.minute, cSep, clockState.second, telemetry.satellites);
+    display.println(timeBuf);
+    
+    display.print(F("LAT:")); 
+    display.println(telemetry.lat, 6);
+    
+    display.print(F("LON:")); 
+    display.println(telemetry.lon, 6);
+    
+    display.print(F("ALT:"));
+    display.print(telemetry.altitude, 1);
+    display.print(F(" SPD:"));
+    display.println(telemetry.speed, 1);
   } else {
-    sprintf(timeBuf, "--%c--%c-- FIX:%s S:%02d", cSep, cSep, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
+    display.setTextSize(2);
+    display.setCursor(0, 8);
+    display.println(F(" NO GPS "));
+    
+    display.setTextSize(1);
+    display.setCursor(0, 24);
+    display.print(F("SATS: "));
+    display.print(telemetry.satellites);
   }
-  display.println(timeBuf);
-  
-  display.print(F("LAT:")); 
-  display.println(telemetry.lat, 6);
-  
-  display.print(F("LON:")); 
-  display.println(telemetry.lon, 6);
-  
-  display.print(F("ALT:"));
-  display.print(telemetry.altitude, 1);
-  display.print(F(" SPD:"));
-  display.println(telemetry.speed, 1);
 
   display.display();
 }
