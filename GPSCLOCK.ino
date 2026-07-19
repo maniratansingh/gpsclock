@@ -161,17 +161,49 @@ void updateClock() {
 
   if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
+    static bool inAntiFreeze = true; // Start in anti-freeze to force initial sync
+    static uint8_t lastCheckedGPSSec = 255; // Tracks the last evaluated GPS second
     
-    if (gps.time.isUpdated()) {
-      utcToIST();
-      secondStartTime = millis();
-    } else {
-      if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
-        secondStartTime += CLOCK_INTERVAL_MS;
-        clockState.second++;
-        if (clockState.second >= 60) {
-          clockState.second = 0; clockState.minute++;
-          if (clockState.minute >= 60) { clockState.minute = 0; clockState.hour++; if (clockState.hour >= 24) clockState.hour = 0; }
+    // Detect Anti-Freeze mode (no valid time received for 2 seconds)
+    if (gps.time.age() > 2000) {
+      inAntiFreeze = true;
+    }
+    
+    // Continuous GPS Discipline
+    // We strictly evaluate this ONLY ONCE per new GPS second, regardless of how many 
+    // NMEA sentences (RMC/GGA) contain time data per second.
+    if (gps.time.isUpdated() && gps.time.second() != lastCheckedGPSSec) {
+      lastCheckedGPSSec = gps.time.second();
+      bool needsResync = inAntiFreeze;
+      
+      // If we aren't recovering from anti-freeze, only resync if the internal clock has drifted
+      if (!needsResync) {
+        if (clockState.second != gps.time.second()) {
+          needsResync = true;
+        }
+      }
+      
+      if (needsResync) {
+        utcToIST();
+        secondStartTime = millis();
+        inAntiFreeze = false;
+      }
+    }
+    
+    // The internal oscillator drives the clock smoothly
+    if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
+      secondStartTime += CLOCK_INTERVAL_MS;
+      clockState.second++;
+      if (clockState.second >= 60) {
+        clockState.second = 0; 
+        clockState.minute++;
+        if (clockState.minute >= 60) { 
+            clockState.minute = 0; 
+            clockState.hour++; 
+            if (clockState.hour >= 24) {
+                clockState.hour = 0;
+                incrementDate();
+            }
         }
       }
     }
