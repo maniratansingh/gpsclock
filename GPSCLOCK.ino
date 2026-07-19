@@ -161,10 +161,8 @@ void updateClock() {
 
   if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
-    static uint8_t lastCheckedGPSSec = 255;
     
-    if (gps.time.second() != lastCheckedGPSSec) {
-      lastCheckedGPSSec = gps.time.second();
+    if (gps.time.isUpdated()) {
       utcToIST();
       secondStartTime = millis();
     } else {
