@@ -179,6 +179,16 @@ void updateClock() {
       utcToIST();
       secondStartTime = millis();
       inAntiFreeze = false;
+      
+      // --- DIAGNOSTICS FOR REVIEWER ---
+      Serial.print(F("GPS Time: "));
+      Serial.print(gps.time.hour());
+      Serial.print(F(":"));
+      Serial.print(gps.time.minute());
+      Serial.print(F(":"));
+      Serial.print(gps.time.second());
+      Serial.print(F(" | Copied to ClockState: "));
+      Serial.println(clockState.second);
     }
     
     // The internal oscillator drives the clock smoothly
