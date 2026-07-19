@@ -159,6 +159,17 @@ void readGPS() {
 void updateClock() {
   clockState.isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
 
+  // --- DIAGNOSTICS FOR REVIEWER ---
+  static uint8_t lastSecMonitor = 255;
+  if (gps.time.second() != lastSecMonitor) {
+    lastSecMonitor = gps.time.second();
+    Serial.print(F("[DEBUG] Sec: "));
+    Serial.print(gps.time.second());
+    Serial.print(F(" | isUpdated(): "));
+    Serial.println(gps.time.isUpdated() ? "TRUE" : "FALSE");
+  }
+  // ---------------------------------
+
   if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
     static bool inAntiFreeze = true; // Start in anti-freeze to force initial sync
@@ -180,15 +191,7 @@ void updateClock() {
       secondStartTime = millis();
       inAntiFreeze = false;
       
-      // --- DIAGNOSTICS FOR REVIEWER ---
-      Serial.print(F("GPS Time: "));
-      Serial.print(gps.time.hour());
-      Serial.print(F(":"));
-      Serial.print(gps.time.minute());
-      Serial.print(F(":"));
-      Serial.print(gps.time.second());
-      Serial.print(F(" | Copied to ClockState: "));
-      Serial.println(clockState.second);
+      Serial.println(F("[SYNC] Synchronization block executed!"));
     }
     
     // The internal oscillator drives the clock smoothly
