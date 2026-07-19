@@ -169,25 +169,16 @@ void updateClock() {
       inAntiFreeze = true;
     }
     
-    // Continuous GPS Discipline
+    // GPS Master Clock Synchronization
     // We strictly evaluate this ONLY ONCE per new GPS second, regardless of how many 
     // NMEA sentences (RMC/GGA) contain time data per second.
     if (gps.time.isUpdated() && gps.time.second() != lastCheckedGPSSec) {
       lastCheckedGPSSec = gps.time.second();
-      bool needsResync = inAntiFreeze;
       
-      // If we aren't recovering from anti-freeze, only resync if the internal clock has drifted
-      if (!needsResync) {
-        if (clockState.second != gps.time.second()) {
-          needsResync = true;
-        }
-      }
-      
-      if (needsResync) {
-        utcToIST();
-        secondStartTime = millis();
-        inAntiFreeze = false;
-      }
+      // Every fresh GPS second immediately re-locks the internal clock
+      utcToIST();
+      secondStartTime = millis();
+      inAntiFreeze = false;
     }
     
     // The internal oscillator drives the clock smoothly
