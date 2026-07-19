@@ -55,10 +55,10 @@ struct GPSStats {
 
 // Timers
 unsigned long lastOLEDUpdate = 0;
-unsigned long lastGPSByteRcvd = 0; // Tracks when the GPS is transmitting
 
 void initOLED();
 void initGPS();
+void configureGPS();
 void initMAX7219();
 void readGPS();
 void updateClock();
@@ -68,6 +68,7 @@ int daysInMonth(int m, int y);
 void incrementDate();
 void updateOLED();
 void updateMAX7219();
+void sendUBX(const uint8_t *msg, uint8_t len);
 
 void setup() {
   Serial.begin(115200); // Debug
@@ -81,14 +82,9 @@ void loop() {
   updateClock();
   updateMAX7219();
   
-  // The OLED display.display() call takes ~50ms over I2C, which is long enough to overflow
-  // the tiny 64-byte SoftwareSerial buffer if the GPS is actively transmitting a burst.
-  // We MUST wait until the GPS goes completely silent (>20ms gap) before drawing to the OLED!
   if (millis() - lastOLEDUpdate >= OLED_REFRESH_MS) {
-    if (millis() - lastGPSByteRcvd > 20) {
-      lastOLEDUpdate = millis();
-      updateOLED();
-    }
+    lastOLEDUpdate = millis();
+    updateOLED();
   }
 }
 
@@ -103,8 +99,29 @@ void initOLED() {
   display.display();
 }
 
+void sendUBX(const uint8_t *msg, uint8_t len) {
+  for (uint8_t i = 0; i < len; i++) {
+    gpsSerial.write(msg[i]);
+  }
+  delay(10);
+}
+
+void configureGPS() {
+  // Disable GLL
+  const uint8_t disableGLL[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A};
+  sendUBX(disableGLL, sizeof(disableGLL));
+  // Disable GSA
+  const uint8_t disableGSA[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31};
+  sendUBX(disableGSA, sizeof(disableGSA));
+  // Disable VTG
+  const uint8_t disableVTG[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x46};
+  sendUBX(disableVTG, sizeof(disableVTG));
+}
+
 void initGPS() {
   gpsSerial.begin(GPS_BAUD_RATE);
+  delay(100);
+  configureGPS();
 }
 
 void initMAX7219() {
@@ -115,26 +132,17 @@ void initMAX7219() {
 
 void readGPS() {
   while (gpsSerial.available() > 0) {
-    lastGPSByteRcvd = millis();
     gps.encode(gpsSerial.read());
   }
   
-  // 30-SECOND FLYWHEEL
-  // If the GPS is erratic, we hold onto the last valid location for up to 30 seconds.
-  // This prevents the screen from flickering 'NO GPS' when you are outside.
-  if (gps.location.isValid() && gps.location.age() < 30000) {
+  if (gps.location.isValid() && gps.location.age() < 5000) {
     telemetry.hasFix = true;
     telemetry.lat = gps.location.lat();
     telemetry.lon = gps.location.lng();
     telemetry.speed = gps.speed.kmph();
     telemetry.altitude = gps.altitude.meters();
   } else {
-    // If you go indoors and 30 seconds pass with no fix, the clock officially DIES.
     telemetry.hasFix = false;
-    telemetry.lat = 0.0;
-    telemetry.lon = 0.0;
-    telemetry.speed = 0.0;
-    telemetry.altitude = 0.0;
   }
   
   if (gps.satellites.isValid() && gps.satellites.age() < 10000) {
@@ -149,36 +157,23 @@ void readGPS() {
 }
 
 void updateClock() {
-  clockState.isTimeReal = telemetry.hasFix;
+  clockState.isTimeReal = gps.time.isValid() && gps.date.isValid() && gps.date.year() > 2020;
 
   if (clockState.isTimeReal) {
     static unsigned long secondStartTime = 0;
     static uint8_t lastCheckedGPSSec = 255;
     
-    // GPS Master Clock Synchronization
     if (gps.time.second() != lastCheckedGPSSec) {
       lastCheckedGPSSec = gps.time.second();
-      
-      // Instantly re-lock the internal clock
       utcToIST();
       secondStartTime = millis();
-    }
-    
-    // Anti-Freeze Coasting
-    // The internal oscillator seamlessly drives the clock smoothly between erratic GPS drops
-    if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
-      secondStartTime += CLOCK_INTERVAL_MS;
-      clockState.second++;
-      if (clockState.second >= 60) {
-        clockState.second = 0; 
-        clockState.minute++;
-        if (clockState.minute >= 60) { 
-            clockState.minute = 0; 
-            clockState.hour++; 
-            if (clockState.hour >= 24) {
-                clockState.hour = 0;
-                incrementDate();
-            }
+    } else {
+      if (millis() - secondStartTime >= CLOCK_INTERVAL_MS) {
+        secondStartTime += CLOCK_INTERVAL_MS;
+        clockState.second++;
+        if (clockState.second >= 60) {
+          clockState.second = 0; clockState.minute++;
+          if (clockState.minute >= 60) { clockState.minute = 0; clockState.hour++; if (clockState.hour >= 24) clockState.hour = 0; }
         }
       }
     }
@@ -270,36 +265,28 @@ void updateMAX7219() {
 
 void updateOLED() {
   display.clearDisplay();
+  display.setTextSize(1);
   display.setCursor(0, 0);
   
+  char timeBuf[30];
   char cSep = displayState.showColon ? ':' : ' ';
-  
   if (clockState.isTimeReal) {
-    display.setTextSize(1);
-    char timeBuf[30];
-    sprintf(timeBuf, "%02d%c%02d%c%02d FIX:OK S:%02d", clockState.hour, cSep, clockState.minute, cSep, clockState.second, telemetry.satellites);
-    display.println(timeBuf);
-    
-    display.print(F("LAT:")); 
-    display.println(telemetry.lat, 6);
-    
-    display.print(F("LON:")); 
-    display.println(telemetry.lon, 6);
-    
-    display.print(F("ALT:"));
-    display.print(telemetry.altitude, 1);
-    display.print(F(" SPD:"));
-    display.println(telemetry.speed, 1);
+    sprintf(timeBuf, "%02d%c%02d%c%02d FIX:%s S:%02d", clockState.hour, cSep, clockState.minute, cSep, clockState.second, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
   } else {
-    display.setTextSize(2);
-    display.setCursor(0, 8);
-    display.println(F(" NO GPS "));
-    
-    display.setTextSize(1);
-    display.setCursor(0, 24);
-    display.print(F("SATS: "));
-    display.print(telemetry.satellites);
+    sprintf(timeBuf, "--%c--%c-- FIX:%s S:%02d", cSep, cSep, telemetry.hasFix ? "OK" : "--", telemetry.satellites);
   }
+  display.println(timeBuf);
+  
+  display.print(F("LAT:")); 
+  display.println(telemetry.lat, 6);
+  
+  display.print(F("LON:")); 
+  display.println(telemetry.lon, 6);
+  
+  display.print(F("ALT:"));
+  display.print(telemetry.altitude, 1);
+  display.print(F(" SPD:"));
+  display.println(telemetry.speed, 1);
 
   display.display();
 }
