@@ -59,7 +59,6 @@ unsigned long lastGPSByteRcvd = 0; // Tracks when the GPS is transmitting
 
 void initOLED();
 void initGPS();
-void configureGPS();
 void initMAX7219();
 void readGPS();
 void updateClock();
@@ -69,7 +68,6 @@ int daysInMonth(int m, int y);
 void incrementDate();
 void updateOLED();
 void updateMAX7219();
-void sendUBX(const uint8_t *msg, uint8_t len);
 
 void setup() {
   Serial.begin(115200); // Debug
@@ -105,29 +103,8 @@ void initOLED() {
   display.display();
 }
 
-void sendUBX(const uint8_t *msg, uint8_t len) {
-  for (uint8_t i = 0; i < len; i++) {
-    gpsSerial.write(msg[i]);
-  }
-  delay(10);
-}
-
-void configureGPS() {
-  // Disable GLL
-  const uint8_t disableGLL[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A};
-  sendUBX(disableGLL, sizeof(disableGLL));
-  // Disable GSA
-  const uint8_t disableGSA[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31};
-  sendUBX(disableGSA, sizeof(disableGSA));
-  // Disable VTG
-  const uint8_t disableVTG[] = {0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x46};
-  sendUBX(disableVTG, sizeof(disableVTG));
-}
-
 void initGPS() {
   gpsSerial.begin(GPS_BAUD_RATE);
-  delay(100);
-  configureGPS();
 }
 
 void initMAX7219() {
