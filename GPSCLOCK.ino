@@ -55,6 +55,7 @@ struct GPSStats {
 
 // Timers
 unsigned long lastOLEDUpdate = 0;
+unsigned long lastGPSByteRcvd = 0; // Tracks when the GPS is transmitting
 
 void initOLED();
 void initGPS();
@@ -82,9 +83,14 @@ void loop() {
   updateClock();
   updateMAX7219();
   
+  // The OLED display.display() call takes ~50ms over I2C, which is long enough to overflow
+  // the tiny 64-byte SoftwareSerial buffer if the GPS is actively transmitting a burst.
+  // We MUST wait until the GPS goes completely silent (>20ms gap) before drawing to the OLED!
   if (millis() - lastOLEDUpdate >= OLED_REFRESH_MS) {
-    lastOLEDUpdate = millis();
-    updateOLED();
+    if (millis() - lastGPSByteRcvd > 20) {
+      lastOLEDUpdate = millis();
+      updateOLED();
+    }
   }
 }
 
@@ -132,6 +138,7 @@ void initMAX7219() {
 
 void readGPS() {
   while (gpsSerial.available() > 0) {
+    lastGPSByteRcvd = millis();
     gps.encode(gpsSerial.read());
   }
   
