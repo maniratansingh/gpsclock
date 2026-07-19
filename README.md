@@ -17,26 +17,60 @@ A high-precision, dual-display GPS Clock built for Arduino. This project combine
 - 1x MAX7219 8x8 LED Matrix (or 4-in-1 matrix block)
 - 1x SSD1306 OLED Display (128x32, I2C)
 
-## Wiring Guide
+## Comprehensive Wiring & Diagram Reference
 
-### Neo-6M GPS (SoftwareSerial)
-- **VCC:** 5V or 3.3V (Depends on your module)
-- **GND:** GND
-- **TX:** Arduino Pin 3
-- **RX:** Arduino Pin 4
+### Visual Wiring Diagram
+```text
+                          +-------------------+
+                          |                   |
+                          |   ARDUINO NANO    |
+                          |                   |
+               +--------->| 5V                |
+               | +------->| GND               |
+               | |        |                   |
+               | |        | D3 (RX) <------------- TX (GPS Neo-6M)
+               | |        | D4 (TX) -------------> RX (GPS Neo-6M)
+               | |        |                   |
+               | |        | A4 (SDA) <-----------> SDA (SSD1306 OLED)
+               | |        | A5 (SCL) <-----------> SCL (SSD1306 OLED)
+               | |        |                   |
+               | |        | D5 (MOSI) -----------> DIN (MAX7219)
+               | |        | D6 (SS)   -----------> CS  (MAX7219)
+               | |        | D7 (SCK)  -----------> CLK (MAX7219)
+               | |        +-------------------+
+               | |
++---------+    | |    +---------+       +---------+
+| Neo-6M  |    | |    | SSD1306 |       | MAX7219 |
+|   GPS   |    | |    |  OLED   |       | Matrix  |
++---------+    | |    +---------+       +---------+
+| VCC     |----+ |    | VCC     |----+  | VCC     |----+
+| GND     |------+    | GND     |----+  | GND     |----+
+| TX      |           | SCL     |       | DIN     |
+| RX      |           | SDA     |       | CS      |
++---------+           +---------+       | CLK     |
+                                        +---------+
+```
 
-### SSD1306 OLED (I2C)
-- **VCC:** 3.3V or 5V
-- **GND:** GND
-- **SCL:** Arduino A5
-- **SDA:** Arduino A4
+### Complete Pinout Table
 
-### MAX7219 Matrix (SPI)
-- **VCC:** 5V
-- **GND:** GND
-- **DIN:** Arduino Pin 5
-- **CS:** Arduino Pin 6
-- **CLK:** Arduino Pin 7
+| Component | Component Pin | Arduino Pin | Notes / Description |
+| :--- | :--- | :--- | :--- |
+| **Neo-6M GPS** | VCC | 5V | GPS requires steady power; 5V is recommended for most Neo-6M breakout boards. |
+| | GND | GND | Common ground. |
+| | TX | D3 | Transmits NMEA sentences to the Arduino's SoftwareSerial RX pin. |
+| | RX | D4 | (Optional) Receives commands from Arduino's SoftwareSerial TX pin. |
+| **SSD1306 OLED** | VCC | 5V / 3.3V | I2C Display power. |
+| | GND | GND | Common ground. |
+| | SCL | A5 | I2C Clock Line. |
+| | SDA | A4 | I2C Data Line. |
+| **MAX7219 Matrix** | VCC | 5V | **MUST be 5V.** LED matrices draw significant current. |
+| | GND | GND | Common ground. |
+| | DIN | D5 | SPI Data In (MOSI). |
+| | CS | D6 | SPI Chip Select (SS). |
+| | CLK | D7 | SPI Clock (SCK). |
+
+### Important Power Warning ⚠️
+If you are running the MAX7219 matrix, the OLED, and the GPS module all at the same time, they can draw a significant amount of current (especially the LED matrix when many LEDs are lit). If you experience brown-outs, random freezing, or the GPS failing to get a fix, **do not power this purely from a cheap laptop USB port**. Provide a strong 5V power supply (like a wall charger) directly to the Arduino.
 
 ## First Run & Cold Starts
 
