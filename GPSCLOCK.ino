@@ -135,14 +135,25 @@ void readGPS() {
     gps.encode(gpsSerial.read());
   }
   
-  if (gps.location.isValid() && gps.location.age() < 5000) {
-    telemetry.hasFix = true;
-    telemetry.lat = gps.location.lat();
-    telemetry.lon = gps.location.lng();
-    telemetry.speed = gps.speed.kmph();
-    telemetry.altitude = gps.altitude.meters();
-  } else {
-    telemetry.hasFix = false;
+  // 1. Current Live Status of the Fix (Transient)
+  // Used to drive the FIX:OK / FIX:-- indicator on the OLED
+  telemetry.hasFix = gps.location.isValid() && gps.location.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 4;
+  
+  // 2. Persistent Location Handling (Last Known Good)
+  // We only overwrite the persistent variables when a fresh, mathematically valid, 
+  // and geometrically strong (4+ sats) 3D coordinate arrives.
+  if (gps.location.isUpdated() && 
+      gps.location.isValid() && 
+      gps.satellites.isValid() && 
+      gps.satellites.value() >= 4) {
+    
+    // Null Island / Zero-Coordinate Defense (Reject anything < 0.001 degrees)
+    if (abs(gps.location.lat()) > 0.001 || abs(gps.location.lng()) > 0.001) {
+      telemetry.lat = gps.location.lat();
+      telemetry.lon = gps.location.lng();
+      telemetry.speed = gps.speed.kmph();
+      telemetry.altitude = gps.altitude.meters();
+    }
   }
   
   if (gps.satellites.isValid() && gps.satellites.age() < 10000) {
