@@ -4,8 +4,10 @@ A high-precision, dual-display GPS Clock built for Arduino. This project combine
 
 ## Pro Architecture Features
 
-- **Hardware UBX Optimization:** Automatically configures the Neo-6M GPS at startup to disable unnecessary data streams (`GLL`, `GSA`, `VTG`). This drastically reduces CPU load, minimizes serial traffic, and prevents buffer overflows.
-- **Decoupled Schedulers:** Display updates and GPS parsing run on completely separate, non-blocking timers. The OLED strictly updates exactly every 500ms to preserve the I2C bus bandwidth while parsing remains continuous.
+- **Silent Window I2C Synchronization:** The OLED display updates are perfectly synchronized to the physical pauses in the GPS NMEA data stream. This prevents the tiny 64-byte Arduino serial buffer from overflowing while the I2C bus is occupied, ensuring zero dropped sentences.
+- **Split-Tier Navigation Logic (2D/3D):** Architected specifically for weak or small ceramic antennas. Latitude, Longitude, and Speed update aggressively on a minimum 3-satellite (2D) fix, while Altitude remains strictly guarded by a 4-satellite (3D) requirement to prevent vertical drift.
+- **Persistent Location Memory:** If the GPS signal is completely lost (e.g., walking indoors), the OLED elegantly freezes on your last known good location instead of displaying zeroes or garbage coordinates.
+- **Null Island Defense:** Automatically rejects floating-point `0.0000` coordinate streams caused by hardware glitches.
 - **Advanced Display Caching:** The MAX7219 matrix caches its active digits in memory (`lastMaxDigits`). It only transmits SPI packets for the specific digits that have physically changed on the clock, resulting in lightning-fast redraws.
 - **SRAM Optimized:** Eliminates all bulky character arrays. Telemetry floats are printed directly to the OLED to maximize free memory on the Arduino Nano.
 - **Robust State Management:** Global variables are neatly organized into isolated `GPSTelemetry`, `ClockState`, and `DisplayState` structures.
